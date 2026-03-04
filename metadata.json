@@ -1,0 +1,5 @@
+{
+  "name": "JavaWeb DevTools",
+  "description": "A collection of daily utilities for backend developers, including a cURL modifier and a SQL IN clause converter.",
+  "requestFramePermissions": []
+}
