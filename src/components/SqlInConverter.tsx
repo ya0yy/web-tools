@@ -1,47 +1,116 @@
-import React, { useState, useEffect } from 'react';
+import React, { useMemo, useState } from 'react';
 import { Copy, Check } from 'lucide-react';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+
+type Separator = 'whitespace' | 'newline' | 'comma';
+type QuoteChar = 'single' | 'double' | 'none';
+
+type ConvertResult = {
+  output: string;
+  sourceItemCount: number;
+  displayedItemCount: number;
+  truncatedByInput: boolean;
+  truncatedByItemCount: boolean;
+};
+
+const INPUT_DEBOUNCE_MS = 150;
+const PREVIEW_INPUT_CHAR_LIMIT = 1_000_000;
+const PREVIEW_ITEM_LIMIT = 5_000;
+
+function splitItemsBySeparator(input: string, separator: Separator): string[] {
+  if (separator === 'newline') {
+    return input.split(/\r?\n/);
+  }
+  if (separator === 'comma') {
+    return input.split(',');
+  }
+  return input.split(/[\s,]+/);
+}
+
+function wrapItemByQuote(item: string, quoteChar: QuoteChar): string {
+  if (quoteChar === 'single') {
+    return `'${item}'`;
+  }
+  if (quoteChar === 'double') {
+    return `"${item}"`;
+  }
+  return item;
+}
+
+function buildSqlInOutput(
+  rawInput: string,
+  separator: Separator,
+  quoteChar: QuoteChar,
+  removeDuplicates: boolean,
+  options?: { previewMode?: boolean },
+): ConvertResult {
+  if (!rawInput.trim()) {
+    return {
+      output: '',
+      sourceItemCount: 0,
+      displayedItemCount: 0,
+      truncatedByInput: false,
+      truncatedByItemCount: false,
+    };
+  }
+
+  const previewMode = options?.previewMode ?? false;
+  let workingInput = rawInput;
+  let truncatedByInput = false;
+
+  if (previewMode && rawInput.length > PREVIEW_INPUT_CHAR_LIMIT) {
+    // 预览阶段仅处理前 1MB，避免超长输入在每次更新时造成大对象分配。
+    workingInput = rawInput.slice(0, PREVIEW_INPUT_CHAR_LIMIT);
+    truncatedByInput = true;
+  }
+
+  let items = splitItemsBySeparator(workingInput, separator)
+    .map((item) => item.trim())
+    .filter((item) => item.length > 0);
+
+  if (removeDuplicates) {
+    items = Array.from(new Set(items));
+  }
+
+  const sourceItemCount = items.length;
+  let displayedItems = items;
+  let truncatedByItemCount = false;
+
+  if (previewMode && items.length > PREVIEW_ITEM_LIMIT) {
+    // 预览输出限制条数，避免在文本框中保留过长字符串副本。
+    displayedItems = items.slice(0, PREVIEW_ITEM_LIMIT);
+    truncatedByItemCount = true;
+  }
+
+  const output = displayedItems.map((item) => wrapItemByQuote(item, quoteChar)).join(', ');
+
+  return {
+    output,
+    sourceItemCount,
+    displayedItemCount: displayedItems.length,
+    truncatedByInput,
+    truncatedByItemCount,
+  };
+}
 
 export default function SqlInConverter() {
   const [input, setInput] = useState('');
-  const [output, setOutput] = useState('');
   const [copied, setCopied] = useState(false);
-  
-  const [separator, setSeparator] = useState<'whitespace' | 'newline' | 'comma'>('whitespace');
-  const [quoteChar, setQuoteChar] = useState<'single' | 'double' | 'none'>('single');
+  const [separator, setSeparator] = useState<Separator>('whitespace');
+  const [quoteChar, setQuoteChar] = useState<QuoteChar>('single');
   const [removeDuplicates, setRemoveDuplicates] = useState(true);
+  const debouncedInput = useDebouncedValue(input, INPUT_DEBOUNCE_MS);
 
-  useEffect(() => {
-    if (!input.trim()) {
-      setOutput('');
-      return;
-    }
-
-    let items: string[] = [];
-    if (separator === 'whitespace') {
-      items = input.split(/[\s,]+/);
-    } else if (separator === 'newline') {
-      items = input.split(/\r?\n/);
-    } else if (separator === 'comma') {
-      items = input.split(',');
-    }
-
-    items = items.map(item => item.trim()).filter(item => item.length > 0);
-
-    if (removeDuplicates) {
-      items = Array.from(new Set(items));
-    }
-
-    const formattedItems = items.map(item => {
-      if (quoteChar === 'single') return `'${item}'`;
-      if (quoteChar === 'double') return `"${item}"`;
-      return item;
-    });
-
-    setOutput(formattedItems.join(', '));
-  }, [input, separator, quoteChar, removeDuplicates]);
+  // 预览输出改为派生值，避免 input + output 双份大字符串常驻内存。
+  const previewResult = useMemo(
+    () => buildSqlInOutput(debouncedInput, separator, quoteChar, removeDuplicates, { previewMode: true }),
+    [debouncedInput, separator, quoteChar, removeDuplicates],
+  );
 
   const handleCopy = async () => {
-    await navigator.clipboard.writeText(output);
+    // 复制时按当前完整输入实时生成，避免额外维护全量 output state。
+    const fullResult = buildSqlInOutput(input, separator, quoteChar, removeDuplicates);
+    await navigator.clipboard.writeText(fullResult.output);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
@@ -117,17 +186,28 @@ export default function SqlInConverter() {
             <label className="block text-sm font-medium text-slate-700">SQL IN Clause</label>
             <button
               onClick={handleCopy}
-              disabled={!output}
+              disabled={!previewResult.output}
               className="flex items-center gap-1.5 px-3 py-1.5 text-sm font-medium text-white bg-indigo-600 rounded-md hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
             >
               {copied ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
               {copied ? 'Copied!' : 'Copy'}
             </button>
           </div>
+          {(previewResult.truncatedByInput || previewResult.truncatedByItemCount) && (
+            <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-700">
+              {previewResult.truncatedByInput
+                ? `预览仅处理前 ${PREVIEW_INPUT_CHAR_LIMIT.toLocaleString()} 个字符。`
+                : ''}
+              {previewResult.truncatedByItemCount
+                ? ` 预览仅展示前 ${PREVIEW_ITEM_LIMIT.toLocaleString()} 项（当前 ${previewResult.sourceItemCount.toLocaleString()} 项）。`
+                : ''}
+              {' '}复制按钮会按完整输入重新生成结果。
+            </div>
+          )}
           <textarea
             className="w-full flex-1 min-h-[300px] p-4 bg-slate-900 text-slate-50 border border-slate-800 rounded-xl shadow-inner font-mono text-sm resize-none focus:ring-2 focus:ring-indigo-500 focus:outline-none"
             readOnly
-            value={output}
+            value={previewResult.output}
             placeholder="'123', '456', '789'"
           />
         </div>

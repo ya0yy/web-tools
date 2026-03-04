@@ -1,84 +1,138 @@
-import React, { useState, useEffect } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Check, Plus, Trash2 } from 'lucide-react';
+import useDebouncedValue from '../hooks/useDebouncedValue';
+
+type QueryParam = {
+  id: string;
+  key: string;
+  value: string;
+  enabled: boolean;
+};
+
+const DEFAULT_BASE_URL = 'http://localhost:8080';
+const BASE_URL_HISTORY_KEY = 'baseUrlHistory';
+const MAX_BASE_URL_HISTORY = 20;
+const INPUT_DEBOUNCE_MS = 150;
+
+function loadBaseUrlHistory(): string[] {
+  try {
+    const saved = localStorage.getItem(BASE_URL_HISTORY_KEY);
+    if (!saved) {
+      return [DEFAULT_BASE_URL];
+    }
+
+    const parsed = JSON.parse(saved);
+    if (Array.isArray(parsed) && parsed.length > 0) {
+      return parsed.filter((item) => typeof item === 'string');
+    }
+  } catch (error) {
+    console.error('读取 Base URL 历史记录失败', error);
+  }
+
+  return [DEFAULT_BASE_URL];
+}
+
+function parseCurlCommand(input: string): { parsedUrl: string; params: QueryParam[] } {
+  if (!input.trim()) {
+    return { parsedUrl: '', params: [] };
+  }
+
+  const urlRegex = /(https?:\/\/[^\s'"]+)/;
+  const match = input.match(urlRegex);
+  if (!match) {
+    return { parsedUrl: '', params: [] };
+  }
+
+  try {
+    const url = new URL(match[0]);
+    const params: QueryParam[] = [];
+    let index = 0;
+
+    // 将 URL 查询参数拆分成可编辑结构，便于在 UI 上独立开关与修改。
+    url.searchParams.forEach((value, key) => {
+      index += 1;
+      params.push({
+        id: `param-${index}`,
+        key,
+        value,
+        enabled: true,
+      });
+    });
+
+    return { parsedUrl: match[0], params };
+  } catch (error) {
+    console.error('解析 cURL URL 失败', error);
+    return { parsedUrl: '', params: [] };
+  }
+}
 
 export default function CurlModifier() {
   const [inputCurl, setInputCurl] = useState('');
+  const debouncedInputCurl = useDebouncedValue(inputCurl, INPUT_DEBOUNCE_MS);
   const [parsedUrl, setParsedUrl] = useState<string>('');
-  const [baseUrl, setBaseUrl] = useState('http://localhost:8080');
-  const [baseUrlHistory, setBaseUrlHistory] = useState<string[]>(() => {
-    const saved = localStorage.getItem('baseUrlHistory');
-    return saved ? JSON.parse(saved) : ['http://localhost:8080'];
-  });
+  const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
+  const [baseUrlHistory, setBaseUrlHistory] = useState<string[]>(loadBaseUrlHistory);
   const [outByJq, setOutByJq] = useState(false);
-  const [queryParams, setQueryParams] = useState<{ id: string; key: string; value: string; enabled: boolean }[]>([]);
-  const [outputCurl, setOutputCurl] = useState('');
+  const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const [copied, setCopied] = useState(false);
 
-  const handleParse = (val: string) => {
-    setInputCurl(val);
-    const urlRegex = /(https?:\/\/[^\s'"]+)/;
-    const match = val.match(urlRegex);
-    if (match) {
-      try {
-        const url = new URL(match[0]);
-        setParsedUrl(match[0]);
-
-        const params: any[] = [];
-        url.searchParams.forEach((value, key) => {
-          params.push({ id: Math.random().toString(), key, value, enabled: true });
-        });
-        setQueryParams(params);
-      } catch (e) {
-        console.error("Failed to parse URL", e);
-      }
-    } else {
-      setParsedUrl('');
-      setQueryParams([]);
-    }
-  };
-
   useEffect(() => {
-    if (!inputCurl) {
-      setOutputCurl('');
-      return;
+    // 对输入做防抖后再解析，减少每次按键都进行 URL 解析和数组重建。
+    const parsedResult = parseCurlCommand(debouncedInputCurl);
+    setParsedUrl(parsedResult.parsedUrl);
+    setQueryParams(parsedResult.params);
+  }, [debouncedInputCurl]);
+
+  const outputCurl = useMemo(() => {
+    if (!debouncedInputCurl) {
+      return '';
     }
+
     if (!parsedUrl) {
-      setOutputCurl(inputCurl + (outByJq ? ' | jq' : ''));
-      return;
+      return debouncedInputCurl + (outByJq ? ' | jq' : '');
     }
 
     try {
       const url = new URL(parsedUrl);
-      if (baseUrl) {
-        const newBase = new URL(baseUrl.startsWith('http') ? baseUrl : `http://${baseUrl}`);
+      const trimmedBaseUrl = baseUrl.trim();
+
+      if (trimmedBaseUrl) {
+        const normalizedBaseUrl = trimmedBaseUrl.startsWith('http')
+          ? trimmedBaseUrl
+          : `http://${trimmedBaseUrl}`;
+        const newBase = new URL(normalizedBaseUrl);
         url.protocol = newBase.protocol;
         url.host = newBase.host;
-        url.port = newBase.port;
       }
 
       url.search = '';
       queryParams
-        .filter((p) => p.enabled && p.key)
-        .forEach((p) => {
-          url.searchParams.append(p.key, p.value);
+        .filter((param) => param.enabled && param.key)
+        .forEach((param) => {
+          url.searchParams.append(param.key, param.value);
         });
 
-      let result = inputCurl.replace(parsedUrl, url.toString());
+      let result = debouncedInputCurl.replace(parsedUrl, url.toString());
       if (outByJq) {
         result += ' | jq';
       }
-      setOutputCurl(result);
-    } catch (e) {
-      setOutputCurl(inputCurl + (outByJq ? ' | jq' : ''));
+
+      return result;
+    } catch (error) {
+      console.error('生成修改后的 cURL 失败', error);
+      return debouncedInputCurl + (outByJq ? ' | jq' : '');
     }
-  }, [inputCurl, parsedUrl, baseUrl, queryParams, outByJq]);
+  }, [debouncedInputCurl, parsedUrl, baseUrl, queryParams, outByJq]);
 
   const saveBaseUrlToHistory = (url: string) => {
     const trimmed = url.trim();
     if (trimmed) {
-      const newHistory = [trimmed, ...baseUrlHistory.filter(h => h !== trimmed)].slice(0, 20);
+      const newHistory = [trimmed, ...baseUrlHistory.filter((item) => item !== trimmed)].slice(
+        0,
+        MAX_BASE_URL_HISTORY,
+      );
       setBaseUrlHistory(newHistory);
-      localStorage.setItem('baseUrlHistory', JSON.stringify(newHistory));
+      localStorage.setItem(BASE_URL_HISTORY_KEY, JSON.stringify(newHistory));
     }
   };
 
@@ -120,7 +174,7 @@ export default function CurlModifier() {
               className="w-full h-32 p-3 bg-white border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm resize-none"
               placeholder="curl 'https://api.example.com/v1/data?id=123' -H 'Authorization: Bearer token'..."
               value={inputCurl}
-              onChange={(e) => handleParse(e.target.value)}
+              onChange={(e) => setInputCurl(e.target.value)}
             />
           </div>
 

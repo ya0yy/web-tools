@@ -3,10 +3,11 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState } from 'react';
+import React, { Suspense, lazy, useState } from 'react';
 import { Terminal, Database, Wrench } from 'lucide-react';
-import CurlModifier from './components/CurlModifier';
-import SqlInConverter from './components/SqlInConverter';
+
+const CurlModifier = lazy(() => import('./components/CurlModifier'));
+const SqlInConverter = lazy(() => import('./components/SqlInConverter'));
 
 export default function App() {
   const [activeTab, setActiveTab] = useState('curl');
@@ -48,12 +49,16 @@ export default function App() {
       {/* Main Content */}
       <main className="flex-1 p-6 md:p-8 overflow-auto">
         <div className="max-w-5xl mx-auto">
-          <div className={activeTab === 'curl' ? 'block' : 'hidden'}>
-            <CurlModifier />
-          </div>
-          <div className={activeTab === 'sql' ? 'block' : 'hidden'}>
-            <SqlInConverter />
-          </div>
+          <Suspense
+            fallback={
+              <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
+                组件加载中...
+              </div>
+            }
+          >
+            {/* 只挂载当前 Tab 组件，避免隐藏组件持续占用状态与内存。 */}
+            {activeTab === 'curl' ? <CurlModifier /> : <SqlInConverter />}
+          </Suspense>
         </div>
       </main>
     </div>
