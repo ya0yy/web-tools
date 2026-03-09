@@ -1,13 +1,14 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { Copy, Check, Plus, Trash2 } from 'lucide-react';
 import useDebouncedValue from '../hooks/useDebouncedValue';
-
-type QueryParam = {
-  id: string;
-  key: string;
-  value: string;
-  enabled: boolean;
-};
+import {
+  formatJsonBody,
+  parseCurlCommand,
+  replaceCurlBody,
+  replaceUrlInCurlCommand,
+  type CurlBodySegment,
+  type QueryParam,
+} from '../utils/curlModifierUtils';
 
 const DEFAULT_BASE_URL = 'http://localhost:8080';
 const BASE_URL_HISTORY_KEY = 'baseUrlHistory';
@@ -31,41 +32,6 @@ function loadBaseUrlHistory(): string[] {
 
   return [DEFAULT_BASE_URL];
 }
-
-function parseCurlCommand(input: string): { parsedUrl: string; params: QueryParam[] } {
-  if (!input.trim()) {
-    return { parsedUrl: '', params: [] };
-  }
-
-  const urlRegex = /(https?:\/\/[^\s'"]+)/;
-  const match = input.match(urlRegex);
-  if (!match) {
-    return { parsedUrl: '', params: [] };
-  }
-
-  try {
-    const url = new URL(match[0]);
-    const params: QueryParam[] = [];
-    let index = 0;
-
-    // 将 URL 查询参数拆分成可编辑结构，便于在 UI 上独立开关与修改。
-    url.searchParams.forEach((value, key) => {
-      index += 1;
-      params.push({
-        id: `param-${index}`,
-        key,
-        value,
-        enabled: true,
-      });
-    });
-
-    return { parsedUrl: match[0], params };
-  } catch (error) {
-    console.error('解析 cURL URL 失败', error);
-    return { parsedUrl: '', params: [] };
-  }
-}
-
 export default function CurlModifier() {
   const [inputCurl, setInputCurl] = useState('');
   const debouncedInputCurl = useDebouncedValue(inputCurl, INPUT_DEBOUNCE_MS);
@@ -74,13 +40,21 @@ export default function CurlModifier() {
   const [baseUrlHistory, setBaseUrlHistory] = useState<string[]>(loadBaseUrlHistory);
   const [outByJq, setOutByJq] = useState(false);
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
+  const [bodySegment, setBodySegment] = useState<CurlBodySegment | null>(null);
+  const [bodyText, setBodyText] = useState('');
+  const [hasBodyFlag, setHasBodyFlag] = useState(false);
+  const [bodyFormatError, setBodyFormatError] = useState('');
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    // 对输入做防抖后再解析，减少每次按键都进行 URL 解析和数组重建。
+    // 对输入做防抖后再解析，避免每次按键都重建 URL、Query 和 body 编辑状态。
     const parsedResult = parseCurlCommand(debouncedInputCurl);
     setParsedUrl(parsedResult.parsedUrl);
     setQueryParams(parsedResult.params);
+    setBodySegment(parsedResult.bodySegment);
+    setBodyText(parsedResult.bodySegment?.bodyText ?? '');
+    setHasBodyFlag(parsedResult.hasBodyFlag);
+    setBodyFormatError('');
   }, [debouncedInputCurl]);
 
   const outputCurl = useMemo(() => {
@@ -88,31 +62,10 @@ export default function CurlModifier() {
       return '';
     }
 
-    if (!parsedUrl) {
-      return debouncedInputCurl + (outByJq ? ' | jq' : '');
-    }
-
     try {
-      const url = new URL(parsedUrl);
-      const trimmedBaseUrl = baseUrl.trim();
-
-      if (trimmedBaseUrl) {
-        const normalizedBaseUrl = trimmedBaseUrl.startsWith('http')
-          ? trimmedBaseUrl
-          : `http://${trimmedBaseUrl}`;
-        const newBase = new URL(normalizedBaseUrl);
-        url.protocol = newBase.protocol;
-        url.host = newBase.host;
-      }
-
-      url.search = '';
-      queryParams
-        .filter((param) => param.enabled && param.key)
-        .forEach((param) => {
-          url.searchParams.append(param.key, param.value);
-        });
-
-      let result = debouncedInputCurl.replace(parsedUrl, url.toString());
+      // 先基于原始命令替换 body，再替换 URL，避免原始 body 位置索引在 URL 长度变化后失效。
+      let result = replaceCurlBody(debouncedInputCurl, bodyText, bodySegment);
+      result = replaceUrlInCurlCommand(result, parsedUrl, baseUrl, queryParams);
       if (outByJq) {
         result += ' | jq';
       }
@@ -122,7 +75,7 @@ export default function CurlModifier() {
       console.error('生成修改后的 cURL 失败', error);
       return debouncedInputCurl + (outByJq ? ' | jq' : '');
     }
-  }, [debouncedInputCurl, parsedUrl, baseUrl, queryParams, outByJq]);
+  }, [debouncedInputCurl, parsedUrl, baseUrl, queryParams, bodyText, bodySegment, outByJq]);
 
   const saveBaseUrlToHistory = (url: string) => {
     const trimmed = url.trim();
@@ -158,11 +111,25 @@ export default function CurlModifier() {
     setQueryParams(queryParams.filter((p) => p.id !== id));
   };
 
+  const handleFormatBody = () => {
+    const formatResult = formatJsonBody(bodyText);
+
+    if ('message' in formatResult) {
+      setBodyFormatError(formatResult.message);
+      return;
+    }
+
+    setBodyText(formatResult.formatted);
+    setBodyFormatError('');
+  };
+
   return (
     <div className="space-y-6">
       <div>
         <h2 className="text-2xl font-semibold tracking-tight text-slate-900">cURL Modifier</h2>
-        <p className="text-slate-500 mt-1">Paste a cURL command to easily change its Base URL and query parameters.</p>
+        <p className="text-slate-500 mt-1">
+          Paste a cURL command to easily change its Base URL, query parameters, and body text.
+        </p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
@@ -253,6 +220,45 @@ export default function CurlModifier() {
                     </button>
                   </div>
                 ))}
+              </div>
+            )}
+          </div>
+
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-3">
+              <label className="block text-sm font-medium text-slate-700">Body</label>
+              <button
+                onClick={handleFormatBody}
+                disabled={!bodyText}
+                className="px-3 py-1.5 text-xs font-medium text-indigo-600 border border-indigo-200 rounded-md hover:bg-indigo-50 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
+              >
+                Format JSON
+              </button>
+            </div>
+
+            <textarea
+              className="w-full min-h-[180px] p-3 bg-white border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm resize-y"
+              placeholder="Request body text. If valid JSON, you can format it with the button above."
+              value={bodyText}
+              onChange={(e) => {
+                setBodyText(e.target.value);
+                if (bodyFormatError) {
+                  setBodyFormatError('');
+                }
+              }}
+            />
+
+            {bodyFormatError ? (
+              <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2">
+                {bodyFormatError}
+              </div>
+            ) : (
+              <div className="text-xs text-slate-500">
+                {hasBodyFlag && !bodySegment
+                  ? 'A body flag was detected, but its original value could not be read. Editing here will overwrite the output body.'
+                  : hasBodyFlag
+                    ? 'The body text here stays editable as raw text. JSON formatting is optional.'
+                    : 'No body detected. Typing here will append --data-raw to the output cURL.'}
               </div>
             )}
           </div>
