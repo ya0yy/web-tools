@@ -47,8 +47,8 @@ export default function App() {
       </aside>
 
       {/* Main Content */}
-      <main className="flex-1 p-6 md:p-8 overflow-auto">
-        <div className="max-w-5xl mx-auto">
+      <main className="flex-1 p-6 md:p-8 overflow-auto flex flex-col">
+        <div className="max-w-5xl mx-auto flex-1 w-full">
           <Suspense
             fallback={
               <div className="rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm text-slate-500">
@@ -60,6 +60,19 @@ export default function App() {
             {activeTab === 'curl' ? <CurlModifier /> : <SqlInConverter />}
           </Suspense>
         </div>
+
+        <footer className="mt-8 py-4 flex justify-center items-center">
+          <a
+            href="https://www.upyun.com/?utm_source=lianmeng&utm_medium=referral"
+            target="_blank"
+            rel="noopener noreferrer"
+            className="flex items-center gap-2 text-base font-medium text-slate-500 hover:text-slate-800 transition-colors opacity-80 hover:opacity-100"
+          >
+            <span>本网站由</span>
+            <img src="/upyun_logo_full.png" alt="又拍云" className="h-6 w-auto" style={{ transform: 'translateY(-1px)' }} />
+            <span>提供 CDN 加速 / 云存储服务</span>
+          </a>
+        </footer>
       </main>
     </div>
   );
