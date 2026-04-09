@@ -5,6 +5,8 @@
 
 import React, { Suspense, lazy, useState } from 'react';
 import { Terminal, Database, Wrench } from 'lucide-react';
+// @ts-ignore
+import upyunLogo from './assets/upyun_logo_full.png';
 
 const CurlModifier = lazy(() => import('./components/CurlModifier'));
 const SqlInConverter = lazy(() => import('./components/SqlInConverter'));
@@ -69,7 +71,7 @@ export default function App() {
             className="flex items-center gap-2 text-base font-medium text-slate-500 hover:text-slate-800 transition-colors opacity-80 hover:opacity-100"
           >
             <span>本网站由</span>
-            <img src="/upyun_logo_full.png" alt="又拍云" className="h-6 w-auto" style={{ transform: 'translateY(-1px)' }} />
+            <img src={upyunLogo} alt="又拍云" className="h-6 w-auto" style={{ transform: 'translateY(-1px)' }} />
             <span>提供 CDN 加速 / 云存储服务</span>
           </a>
         </footer>
