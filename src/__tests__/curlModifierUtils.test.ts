@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  addBaseUrlToHistory,
   extractCurlBodySegment,
+  filterBaseUrlHistory,
   formatJsonBody,
   parseCurlCommand,
+  removeBaseUrlFromHistory,
   replaceCurlBody,
 } from '../utils/curlModifierUtils';
 
@@ -95,4 +98,37 @@ test('formatJsonBody 会为非法 JSON 返回明确错误而不是抛异常', ()
   if (!result.ok) {
     assert.match(result.message, /JSON/);
   }
+});
+
+test('filterBaseUrlHistory 会忽略大小写并按输入内容过滤历史', () => {
+  const history = [
+    'http://localhost:8080',
+    'https://API.example.com',
+    'http://internal.example.com',
+  ];
+
+  assert.deepEqual(filterBaseUrlHistory(history, 'api'), ['https://API.example.com']);
+  assert.deepEqual(filterBaseUrlHistory(history, ''), history);
+});
+
+test('addBaseUrlToHistory 会去重置顶并限制最多 20 条', () => {
+  const history = Array.from({ length: 20 }, (_, index) => `http://host-${index}.example.com`);
+
+  assert.deepEqual(addBaseUrlToHistory(history, ' http://host-5.example.com '), [
+    'http://host-5.example.com',
+    ...history.filter((item) => item !== 'http://host-5.example.com'),
+  ]);
+
+  const appended = addBaseUrlToHistory(history, 'http://new.example.com');
+  assert.equal(appended.length, 20);
+  assert.equal(appended[0], 'http://new.example.com');
+  assert.equal(appended.includes('http://host-19.example.com'), false);
+});
+
+test('removeBaseUrlFromHistory 只删除指定的历史记录', () => {
+  const history = ['http://localhost:8080', 'https://api.example.com'];
+
+  assert.deepEqual(removeBaseUrlFromHistory(history, 'http://localhost:8080'), [
+    'https://api.example.com',
+  ]);
 });

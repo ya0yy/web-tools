@@ -1,9 +1,12 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { Copy, Check, Plus, Trash2 } from 'lucide-react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { Check, ChevronDown, Copy, Plus, Trash2 } from 'lucide-react';
 import useDebouncedValue from '../hooks/useDebouncedValue';
 import {
+  addBaseUrlToHistory,
+  filterBaseUrlHistory,
   formatJsonBody,
   parseCurlCommand,
+  removeBaseUrlFromHistory,
   replaceCurlBody,
   replaceUrlInCurlCommand,
   type CurlBodySegment,
@@ -12,7 +15,6 @@ import {
 
 const DEFAULT_BASE_URL = 'http://localhost:8080';
 const BASE_URL_HISTORY_KEY = 'baseUrlHistory';
-const MAX_BASE_URL_HISTORY = 20;
 const INPUT_DEBOUNCE_MS = 150;
 
 function loadBaseUrlHistory(): string[] {
@@ -38,6 +40,9 @@ export default function CurlModifier() {
   const [parsedUrl, setParsedUrl] = useState<string>('');
   const [baseUrl, setBaseUrl] = useState(DEFAULT_BASE_URL);
   const [baseUrlHistory, setBaseUrlHistory] = useState<string[]>(loadBaseUrlHistory);
+  const [baseUrlFilter, setBaseUrlFilter] = useState('');
+  const [isBaseUrlHistoryOpen, setIsBaseUrlHistoryOpen] = useState(false);
+  const [highlightedBaseUrlIndex, setHighlightedBaseUrlIndex] = useState(-1);
   const [outByJq, setOutByJq] = useState(false);
   const [queryParams, setQueryParams] = useState<QueryParam[]>([]);
   const [bodySegment, setBodySegment] = useState<CurlBodySegment | null>(null);
@@ -45,6 +50,13 @@ export default function CurlModifier() {
   const [hasBodyFlag, setHasBodyFlag] = useState(false);
   const [bodyFormatError, setBodyFormatError] = useState('');
   const [copied, setCopied] = useState(false);
+  const baseUrlComboboxRef = useRef<HTMLDivElement>(null);
+  const baseUrlInputRef = useRef<HTMLInputElement>(null);
+
+  const filteredBaseUrlHistory = useMemo(
+    () => filterBaseUrlHistory(baseUrlHistory, baseUrlFilter),
+    [baseUrlHistory, baseUrlFilter],
+  );
 
   useEffect(() => {
     // 对输入做防抖后再解析，避免每次按键都重建 URL、Query 和 body 编辑状态。
@@ -56,6 +68,18 @@ export default function CurlModifier() {
     setHasBodyFlag(parsedResult.hasBodyFlag);
     setBodyFormatError('');
   }, [debouncedInputCurl]);
+
+  useEffect(() => {
+    const handlePointerDown = (event: MouseEvent) => {
+      if (!baseUrlComboboxRef.current?.contains(event.target as Node)) {
+        setIsBaseUrlHistoryOpen(false);
+        setHighlightedBaseUrlIndex(-1);
+      }
+    };
+
+    document.addEventListener('mousedown', handlePointerDown);
+    return () => document.removeEventListener('mousedown', handlePointerDown);
+  }, []);
 
   const outputCurl = useMemo(() => {
     if (!debouncedInputCurl) {
@@ -78,15 +102,38 @@ export default function CurlModifier() {
   }, [debouncedInputCurl, parsedUrl, baseUrl, queryParams, bodyText, bodySegment, outByJq]);
 
   const saveBaseUrlToHistory = (url: string) => {
-    const trimmed = url.trim();
-    if (trimmed) {
-      const newHistory = [trimmed, ...baseUrlHistory.filter((item) => item !== trimmed)].slice(
-        0,
-        MAX_BASE_URL_HISTORY,
-      );
-      setBaseUrlHistory(newHistory);
+    setBaseUrlHistory((currentHistory) => {
+      const newHistory = addBaseUrlToHistory(currentHistory, url);
       localStorage.setItem(BASE_URL_HISTORY_KEY, JSON.stringify(newHistory));
+      return newHistory;
+    });
+  };
+
+  const selectBaseUrlHistory = (url: string) => {
+    setBaseUrl(url);
+    setBaseUrlFilter('');
+    saveBaseUrlToHistory(url);
+    setIsBaseUrlHistoryOpen(false);
+    setHighlightedBaseUrlIndex(-1);
+    baseUrlInputRef.current?.focus();
+  };
+
+  const deleteBaseUrlHistory = (url: string) => {
+    setBaseUrlHistory((currentHistory) => {
+      const newHistory = removeBaseUrlFromHistory(currentHistory, url);
+      localStorage.setItem(BASE_URL_HISTORY_KEY, JSON.stringify(newHistory));
+      return newHistory;
+    });
+    setHighlightedBaseUrlIndex(-1);
+  };
+
+  const openBaseUrlHistory = (showAll: boolean) => {
+    if (showAll) {
+      setBaseUrlFilter('');
     }
+
+    setIsBaseUrlHistoryOpen(true);
+    setHighlightedBaseUrlIndex(-1);
   };
 
   const handleCopy = async () => {
@@ -147,30 +194,157 @@ export default function CurlModifier() {
 
           <div className="space-y-2">
             <label className="block text-sm font-medium text-slate-700">Target Base URL</label>
-            <input
-              type="text"
-              list="baseUrlHistory"
-              className="w-full p-2 bg-white border border-slate-300 rounded-lg shadow-sm focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"
-              placeholder="http://localhost:8080"
-              value={baseUrl}
-              onChange={(e) => {
-                setBaseUrl(e.target.value);
-                // If the user selects from datalist, save it immediately
-                if (baseUrlHistory.includes(e.target.value)) {
-                  saveBaseUrlToHistory(e.target.value);
+            <div
+              ref={baseUrlComboboxRef}
+              className="relative"
+              onBlur={(event) => {
+                if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+                  setIsBaseUrlHistoryOpen(false);
+                  setHighlightedBaseUrlIndex(-1);
                 }
               }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  saveBaseUrlToHistory(baseUrl);
+            >
+              <input
+                ref={baseUrlInputRef}
+                type="text"
+                role="combobox"
+                aria-autocomplete="list"
+                aria-controls="base-url-history-listbox"
+                aria-expanded={isBaseUrlHistoryOpen}
+                aria-activedescendant={
+                  highlightedBaseUrlIndex >= 0
+                    ? `base-url-history-option-${highlightedBaseUrlIndex}`
+                    : undefined
                 }
-              }}
-            />
-            <datalist id="baseUrlHistory">
-              {baseUrlHistory.map((h, i) => (
-                <option key={i} value={h} />
-              ))}
-            </datalist>
+                className="w-full py-2.5 pl-3 pr-11 bg-white border border-slate-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 font-mono text-sm"
+                placeholder="http://localhost:8080"
+                value={baseUrl}
+                onFocus={() => openBaseUrlHistory(true)}
+                onChange={(event) => {
+                  setBaseUrl(event.target.value);
+                  setBaseUrlFilter(event.target.value);
+                  openBaseUrlHistory(false);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'ArrowDown') {
+                    event.preventDefault();
+                    if (!isBaseUrlHistoryOpen) {
+                      openBaseUrlHistory(true);
+                      return;
+                    }
+
+                    setHighlightedBaseUrlIndex((currentIndex) =>
+                      filteredBaseUrlHistory.length === 0
+                        ? -1
+                        : (currentIndex + 1) % filteredBaseUrlHistory.length,
+                    );
+                    return;
+                  }
+
+                  if (event.key === 'ArrowUp') {
+                    event.preventDefault();
+                    if (!isBaseUrlHistoryOpen) {
+                      openBaseUrlHistory(true);
+                      return;
+                    }
+
+                    setHighlightedBaseUrlIndex((currentIndex) =>
+                      filteredBaseUrlHistory.length === 0
+                        ? -1
+                        : (currentIndex - 1 + filteredBaseUrlHistory.length) %
+                          filteredBaseUrlHistory.length,
+                    );
+                    return;
+                  }
+
+                  if (event.key === 'Enter') {
+                    event.preventDefault();
+                    const highlightedUrl = filteredBaseUrlHistory[highlightedBaseUrlIndex];
+                    if (isBaseUrlHistoryOpen && highlightedUrl) {
+                      selectBaseUrlHistory(highlightedUrl);
+                    } else {
+                      saveBaseUrlToHistory(baseUrl);
+                      setIsBaseUrlHistoryOpen(false);
+                    }
+                    return;
+                  }
+
+                  if (event.key === 'Escape') {
+                    setIsBaseUrlHistoryOpen(false);
+                    setHighlightedBaseUrlIndex(-1);
+                  }
+                }}
+              />
+              <button
+                type="button"
+                aria-label={isBaseUrlHistoryOpen ? 'Close Base URL history' : 'Open Base URL history'}
+                className="absolute inset-y-0 right-0 flex w-11 items-center justify-center text-slate-500 hover:text-slate-800"
+                onClick={() => {
+                  if (isBaseUrlHistoryOpen) {
+                    setIsBaseUrlHistoryOpen(false);
+                    setHighlightedBaseUrlIndex(-1);
+                  } else {
+                    openBaseUrlHistory(true);
+                    baseUrlInputRef.current?.focus();
+                  }
+                }}
+              >
+                <ChevronDown
+                  className={`h-4 w-4 transition-transform ${isBaseUrlHistoryOpen ? 'rotate-180' : ''}`}
+                />
+              </button>
+
+              {isBaseUrlHistoryOpen && (
+                <div
+                  id="base-url-history-listbox"
+                  role="listbox"
+                  className="absolute z-30 mt-2 w-full overflow-hidden rounded-lg border border-slate-200 bg-white shadow-lg"
+                >
+                  {filteredBaseUrlHistory.length > 0 ? (
+                    <div className="max-h-60 overflow-y-auto p-1.5">
+                      {filteredBaseUrlHistory.map((url, index) => {
+                        const isHighlighted = index === highlightedBaseUrlIndex;
+
+                        return (
+                          <div
+                            id={`base-url-history-option-${index}`}
+                            key={url}
+                            role="option"
+                            aria-selected={isHighlighted}
+                            className={`group flex min-h-10 items-center rounded-md transition-colors ${
+                              isHighlighted ? 'bg-indigo-50' : 'hover:bg-slate-50'
+                            }`}
+                            onMouseEnter={() => setHighlightedBaseUrlIndex(index)}
+                          >
+                            <button
+                              type="button"
+                              className="min-w-0 flex-1 truncate px-3 py-2 text-left font-mono text-sm text-slate-800"
+                              title={url}
+                              onClick={() => selectBaseUrlHistory(url)}
+                            >
+                              {url}
+                            </button>
+                            <button
+                              type="button"
+                              aria-label={`Delete ${url} from history`}
+                              title="Delete history entry"
+                              className="mr-1.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-slate-400 opacity-70 transition-colors hover:bg-red-50 hover:text-red-600 focus:opacity-100 group-hover:opacity-100"
+                              onClick={() => deleteBaseUrlHistory(url)}
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  ) : (
+                    <div className="px-3 py-4 text-center text-sm text-slate-500">
+                      No matching URLs.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="space-y-3">

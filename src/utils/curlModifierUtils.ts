@@ -29,9 +29,45 @@ export type JsonFormatResult =
       message: string;
     };
 
+const MAX_BASE_URL_HISTORY = 20;
+
 const BODY_FLAG_ONLY_REGEX = /(^|\s)(--data-raw|--data-binary|--data|-d)\b/;
 const URL_REGEX = /(https?:\/\/[^\s'"]+)/;
 const SHELL_SINGLE_QUOTE_ESCAPE = "'\\''";
+
+/**
+ * 根据当前输入过滤 Base URL 历史，供组合框展示匹配项。
+ */
+export function filterBaseUrlHistory(history: string[], query: string): string[] {
+  const normalizedQuery = query.trim().toLowerCase();
+  if (!normalizedQuery) {
+    return history;
+  }
+
+  return history.filter((item) => item.toLowerCase().includes(normalizedQuery));
+}
+
+/**
+ * 保存 Base URL 时去除首尾空格、删除重复项并把最新使用的地址放到首位。
+ */
+export function addBaseUrlToHistory(history: string[], url: string): string[] {
+  const trimmedUrl = url.trim();
+  if (!trimmedUrl) {
+    return history;
+  }
+
+  return [trimmedUrl, ...history.filter((item) => item !== trimmedUrl)].slice(
+    0,
+    MAX_BASE_URL_HISTORY,
+  );
+}
+
+/**
+ * 从 Base URL 历史中删除指定地址，不修改其他记录的顺序。
+ */
+export function removeBaseUrlFromHistory(history: string[], url: string): string[] {
+  return history.filter((item) => item !== url);
+}
 
 /**
  * 读取 shell 单引号字符串，并兼容 `'\''` 这种 shell 常见的单引号转义形式。
